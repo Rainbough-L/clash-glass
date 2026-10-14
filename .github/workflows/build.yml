@@ -1,0 +1,494 @@
+name: Build Clash Liquid Glass APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Generate Project & Liquid Glass Hook Source
+        run: |
+          mkdir -p app/src/main/java/com/example/clashliquidglass
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/assets
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url "https://api.xposed.info/" }
+              }
+          }
+          rootProject.name = "ClashLiquidGlass"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.3.0' apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2048m
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.example.clashliquidglass'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.example.clashliquidglass"
+                  minSdk 33
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              compileOnly 'de.robv.android.xposed:api:82'
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:label="ClashMeta 液态玻璃"
+                  android:hasCode="true">
+                  <meta-data
+                      android:name="xposedmodule"
+                      android:value="true" />
+                  <meta-data
+                      android:name="xposeddescription"
+                      android:value="将 Clash Meta 菜单界面改造为 Kyant0 风格圆角矩形液态玻璃" />
+                  <meta-data
+                      android:name="xposedminversion"
+                      android:value="93" />
+                  <meta-data
+                      android:name="xposedscope"
+                      android:resource="@array/xposed_scope" />
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/arrays.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string-array name="xposed_scope">
+                  <item>com.github.metacubex.clash.meta</item>
+              </string-array>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/assets/xposed_init
+          com.example.clashliquidglass.MainHook
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/example/clashliquidglass/MainHook.java
+          package com.example.clashliquidglass;
+
+          import android.app.Activity;
+          import android.content.Context;
+          import android.content.res.Configuration;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.ColorFilter;
+          import android.graphics.LinearGradient;
+          import android.graphics.Paint;
+          import android.graphics.PixelFormat;
+          import android.graphics.RadialGradient;
+          import android.graphics.RecordingCanvas;
+          import android.graphics.RenderEffect;
+          import android.graphics.RenderNode;
+          import android.graphics.RuntimeShader;
+          import android.graphics.Shader;
+          import android.graphics.drawable.ColorDrawable;
+          import android.graphics.drawable.Drawable;
+          import android.os.Bundle;
+          import android.util.TypedValue;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.view.ViewTreeObserver;
+          import android.widget.FrameLayout;
+
+          import de.robv.android.xposed.IXposedHookLoadPackage;
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+          import de.robv.android.xposed.callbacks.XC_LoadPackage;
+
+          public class MainHook implements IXposedHookLoadPackage {
+
+              private static final String TARGET_PACKAGE = "com.github.metacubex.clash.meta";
+              private static final int TAG_HOOKED = 0x7F0B8888;
+              private static final int TAG_AURORA_BG = 0x7F0B8889;
+              private static boolean isGlobalCapturing = false;
+
+              private static final String LIQUID_GLASS_SHADER =
+                  "uniform shader backdrop;\n" +
+                  "uniform float2 uSize;\n" +
+                  "uniform float uCornerRadius;\n" +
+                  "uniform float uRefractionHeight;\n" +
+                  "uniform float uRefractionAmount;\n" +
+                  "uniform float uAberration;\n" +
+                  "uniform float uIsDark;\n" +
+                  "\n" +
+                  "float sdRoundedBox(float2 p, float2 b, float r) {\n" +
+                  "    float2 q = abs(p) - b + r;\n" +
+                  "    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;\n" +
+                  "}\n" +
+                  "\n" +
+                  "float2 calcNormal(float2 p, float2 b, float r) {\n" +
+                  "    const float eps = 1.0;\n" +
+                  "    float dx = sdRoundedBox(p + float2(eps, 0.0), b, r) - sdRoundedBox(p - float2(eps, 0.0), b, r);\n" +
+                  "    float dy = sdRoundedBox(p + float2(0.0, eps), b, r) - sdRoundedBox(p - float2(0.0, eps), b, r);\n" +
+                  "    return normalize(float2(dx, dy) + float2(0.0001));\n" +
+                  "}\n" +
+                  "\n" +
+                  "half4 main(float2 coord) {\n" +
+                  "    float2 halfSize = uSize * 0.5;\n" +
+                  "    float2 centerPos = coord - halfSize;\n" +
+                  "    float dist = sdRoundedBox(centerPos, halfSize, uCornerRadius);\n" +
+                  "\n" +
+                  "    float alphaMask = 1.0 - smoothstep(-1.2, 0.5, dist);\n" +
+                  "    if (alphaMask <= 0.001) {\n" +
+                  "        return half4(0.0);\n" +
+                  "    }\n" +
+                  "\n" +
+                  "    float edgeFactor = clamp(1.0 + dist / uRefractionHeight, 0.0, 1.0);\n" +
+                  "    float lensCurve = edgeFactor * edgeFactor * (3.0 - 2.0 * edgeFactor);\n" +
+                  "\n" +
+                  "    float2 normal = calcNormal(centerPos, halfSize, uCornerRadius);\n" +
+                  "    float2 refractOffset = normal * lensCurve * uRefractionAmount;\n" +
+                  "\n" +
+                  "    float2 uvR = clamp(coord - refractOffset * (1.0 + uAberration), float2(1.0), uSize - 1.0);\n" +
+                  "    float2 uvG = clamp(coord - refractOffset, float2(1.0), uSize - 1.0);\n" +
+                  "    float2 uvB = clamp(coord - refractOffset * (1.0 - uAberration), float2(1.0), uSize - 1.0);\n" +
+                  "\n" +
+                  "    half r = backdrop.eval(uvR).r;\n" +
+                  "    half g = backdrop.eval(uvG).g;\n" +
+                  "    half b = backdrop.eval(uvB).b;\n" +
+                  "    half3 refractedColor = half3(r, g, b);\n" +
+                  "\n" +
+                  "    float lightAngle = dot(normal, normalize(float2(-0.6, -0.8))) * 0.5 + 0.5;\n" +
+                  "    float rimHighlight = pow(edgeFactor, 3.2) * (0.28 + 0.45 * lightAngle);\n" +
+                  "    half3 tintColor = uIsDark > 0.5 ? half3(0.16, 0.18, 0.24) : half3(0.95, 0.97, 1.0);\n" +
+                  "    float tintStrength = 0.18 + edgeFactor * 0.10;\n" +
+                  "\n" +
+                  "    half3 finalRGB = mix(refractedColor, tintColor, tintStrength) + half3(rimHighlight);\n" +
+                  "    return half4(finalRGB * alphaMask, alphaMask);\n" +
+                  "}\n";
+
+              @Override
+              public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
+                  if (!TARGET_PACKAGE.equals(lpparam.packageName)) return;
+
+                  XposedHelpers.findAndHookMethod(
+                      Activity.class,
+                      "onPostCreate",
+                      Bundle.class,
+                      new XC_MethodHook() {
+                          @Override
+                          protected void afterHookedMethod(MethodHookParam param) {
+                              Activity activity = (Activity) param.thisObject;
+                              injectAuroraBackdrop(activity);
+                          }
+                      }
+                  );
+
+                  // 录制底层背景时跳过卡片自身绘制，防止文字重影与无限递归
+                  XposedHelpers.findAndHookMethod(
+                      View.class,
+                      "draw",
+                      Canvas.class,
+                      new XC_MethodHook() {
+                          @Override
+                          protected void beforeHookedMethod(MethodHookParam param) {
+                              if (isGlobalCapturing) {
+                                  View v = (View) param.thisObject;
+                                  if (Boolean.TRUE.equals(v.getTag(TAG_HOOKED))) {
+                                      param.setResult(null);
+                                  }
+                              }
+                          }
+                      }
+                  );
+
+                  String[] targetClasses = new String[]{
+                      "com.github.kr328.clash.design.view.LargeActionCard",
+                      "com.github.kr328.clash.design.view.LargeActionLabel",
+                      "com.github.kr328.clash.design.view.ActionLabel",
+                      "com.github.kr328.clash.design.view.ActionTextField"
+                  };
+
+                  for (String className : targetClasses) {
+                      Class<?> clazz = XposedHelpers.findClassIfExists(className, lpparam.classLoader);
+                      if (clazz != null) {
+                          XposedBridge.hookAllConstructors(clazz, new XC_MethodHook() {
+                              @Override
+                              protected void afterHookedMethod(MethodHookParam param) {
+                                  final View view = (View) param.thisObject;
+                                  view.post(() -> transformToLiquidGlassCard(view));
+                              }
+                          });
+                      }
+                  }
+              }
+
+              private void injectAuroraBackdrop(Activity activity) {
+                  if (activity.getWindow() == null) return;
+                  View decor = activity.getWindow().getDecorView();
+                  if (!(decor instanceof ViewGroup)) return;
+                  final ViewGroup decorView = (ViewGroup) decor;
+
+                  if (decorView.findViewWithTag(TAG_AURORA_BG) == null) {
+                      AuroraBackdropView auroraView = new AuroraBackdropView(activity);
+                      auroraView.setTag(TAG_AURORA_BG);
+                      decorView.addView(auroraView, 0, new FrameLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.MATCH_PARENT
+                      ));
+                  }
+
+                  decorView.post(() -> clearOpaqueBackgrounds(decorView));
+
+                  decorView.getViewTreeObserver().addOnScrollChangedListener(
+                      new ViewTreeObserver.OnScrollChangedListener() {
+                          @Override
+                          public void onScrollChanged() {
+                              invalidateAllGlassViews(decorView);
+                          }
+                      }
+                  );
+              }
+
+              private void clearOpaqueBackgrounds(ViewGroup group) {
+                  for (int i = 0; i < group.getChildCount(); i++) {
+                      View child = group.getChildAt(i);
+                      if (Boolean.TRUE.equals(child.getTag(TAG_AURORA_BG)) ||
+                          Boolean.TRUE.equals(child.getTag(TAG_HOOKED))) {
+                          continue;
+                      }
+                      String clsName = child.getClass().getName();
+                      if (!clsName.startsWith("com.github.kr328.clash.design.view.LargeAction") &&
+                          !clsName.startsWith("com.github.kr328.clash.design.view.Action")) {
+                          if (child.getBackground() instanceof ColorDrawable) {
+                              child.setBackground(null);
+                          }
+                          if (child instanceof ViewGroup) {
+                              clearOpaqueBackgrounds((ViewGroup) child);
+                          }
+                      }
+                  }
+              }
+
+              private void invalidateAllGlassViews(ViewGroup group) {
+                  for (int i = 0; i < group.getChildCount(); i++) {
+                      View child = group.getChildAt(i);
+                      if (Boolean.TRUE.equals(child.getTag(TAG_HOOKED))) {
+                          child.invalidate();
+                      } else if (child instanceof ViewGroup) {
+                          invalidateAllGlassViews((ViewGroup) child);
+                      }
+                  }
+              }
+
+              private void transformToLiquidGlassCard(View targetView) {
+                  if (Boolean.TRUE.equals(targetView.getTag(TAG_HOOKED))) return;
+                  targetView.setTag(TAG_HOOKED, Boolean.TRUE);
+
+                  Context context = targetView.getContext();
+                  View root = targetView.getRootView();
+                  if (!(root instanceof ViewGroup)) return;
+                  ViewGroup rootView = (ViewGroup) root;
+
+                  try {
+                      XposedHelpers.callMethod(targetView, "setCardBackgroundColor", Color.TRANSPARENT);
+                      XposedHelpers.callMethod(targetView, "setCardElevation", 0f);
+                  } catch (Throwable ignored) {}
+
+                  ViewGroup.LayoutParams lp = targetView.getLayoutParams();
+                  if (lp instanceof ViewGroup.MarginLayoutParams) {
+                      ViewGroup.MarginLayoutParams mlp = (ViewGroup.MarginLayoutParams) lp;
+                      int hMargin = dpToPx(context, 16f);
+                      int vMargin = dpToPx(context, 6f);
+                      if (mlp.leftMargin < hMargin) {
+                          mlp.setMargins(hMargin, vMargin, hMargin, vMargin);
+                          targetView.setLayoutParams(mlp);
+                      }
+                  }
+
+                  targetView.setBackground(new LiquidGlassDrawable(
+                      context, rootView, targetView, dpToPx(context, 24f)
+                  ));
+                  targetView.setClipToOutline(false);
+              }
+
+              private static int dpToPx(Context context, float dp) {
+                  return (int) TypedValue.applyDimension(
+                      TypedValue.COMPLEX_UNIT_DIP, dp, context.getResources().getDisplayMetrics()
+                  );
+              }
+
+              // 提供丰富色彩层次的液态流光底层画布，使玻璃边缘折射和色散清晰可见
+              private static class AuroraBackdropView extends View {
+                  private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+                  public AuroraBackdropView(Context context) {
+                      super(context);
+                  }
+
+                  @Override
+                  protected void onDraw(Canvas canvas) {
+                      super.onDraw(canvas);
+                      int w = getWidth();
+                      int h = getHeight();
+                      if (w <= 0 || h <= 0) return;
+
+                      boolean isDark = (getResources().getConfiguration().uiMode &
+                          Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+
+                      canvas.drawColor(isDark ? Color.parseColor("#0D1117") : Color.parseColor("#EEF2F9"));
+
+                      int c1 = isDark ? Color.parseColor("#553B82F6") : Color.parseColor("#6660A5FA");
+                      int c2 = isDark ? Color.parseColor("#558B5CF6") : Color.parseColor("#66C084FC");
+                      int c3 = isDark ? Color.parseColor("#5510B981") : Color.parseColor("#6634D399");
+
+                      paint.setShader(new RadialGradient(
+                          w * 0.2f, h * 0.22f, w * 0.7f, c1, Color.TRANSPARENT, Shader.TileMode.CLAMP
+                      ));
+                      canvas.drawRect(0, 0, w, h, paint);
+
+                      paint.setShader(new RadialGradient(
+                          w * 0.85f, h * 0.48f, w * 0.65f, c2, Color.TRANSPARENT, Shader.TileMode.CLAMP
+                      ));
+                      canvas.drawRect(0, 0, w, h, paint);
+
+                      paint.setShader(new RadialGradient(
+                          w * 0.3f, h * 0.8f, w * 0.75f, c3, Color.TRANSPARENT, Shader.TileMode.CLAMP
+                      ));
+                      canvas.drawRect(0, 0, w, h, paint);
+                  }
+              }
+
+              private static class LiquidGlassDrawable extends Drawable {
+                  private final RuntimeShader runtimeShader = new RuntimeShader(LIQUID_GLASS_SHADER);
+                  private final RenderNode renderNode = new RenderNode("ClashMetaLiquidGlass");
+                  private final ViewGroup rootView;
+                  private final View hostView;
+                  private final float cornerRadiusPx;
+                  private final float blurRadiusPx;
+                  private final float refractionHeightPx;
+                  private final float refractionAmountPx;
+                  private final float isDarkFlag;
+                  private final int[] locationTemp = new int[2];
+
+                  public LiquidGlassDrawable(Context context, ViewGroup rootView, View hostView, float cornerRadiusPx) {
+                      this.rootView = rootView;
+                      this.hostView = hostView;
+                      this.cornerRadiusPx = cornerRadiusPx;
+                      this.blurRadiusPx = dpToPx(context, 12f);
+                      this.refractionHeightPx = dpToPx(context, 24f);
+                      this.refractionAmountPx = dpToPx(context, 30f);
+                      boolean isDark = (context.getResources().getConfiguration().uiMode &
+                          Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+                      this.isDarkFlag = isDark ? 1.0f : 0.0f;
+                  }
+
+                  @Override
+                  public void draw(Canvas canvas) {
+                      if (isGlobalCapturing || !canvas.isHardwareAccelerated()) return;
+                      int w = getBounds().width();
+                      int h = getBounds().height();
+                      if (w <= 0 || h <= 0) return;
+
+                      runtimeShader.setFloatUniform("uSize", (float) w, (float) h);
+                      runtimeShader.setFloatUniform("uCornerRadius", cornerRadiusPx);
+                      runtimeShader.setFloatUniform("uRefractionHeight", refractionHeightPx);
+                      runtimeShader.setFloatUniform("uRefractionAmount", refractionAmountPx);
+                      runtimeShader.setFloatUniform("uAberration", 0.25f);
+                      runtimeShader.setFloatUniform("uIsDark", isDarkFlag);
+
+                      RenderEffect blurEffect = RenderEffect.createBlurEffect(
+                          blurRadiusPx, blurRadiusPx, Shader.TileMode.CLAMP
+                      );
+                      RenderEffect lensEffect = RenderEffect.createRuntimeShaderEffect(
+                          runtimeShader, "backdrop"
+                      );
+                      RenderEffect combined = RenderEffect.createChainEffect(lensEffect, blurEffect);
+
+                      renderNode.setPosition(0, 0, w, h);
+                      renderNode.setRenderEffect(combined);
+
+                      hostView.getLocationInWindow(locationTemp);
+                      RecordingCanvas recCanvas = renderNode.beginRecording(w, h);
+                      recCanvas.translate(-locationTemp[0], -locationTemp[1]);
+
+                      isGlobalCapturing = true;
+                      try {
+                          rootView.draw(recCanvas);
+                      } finally {
+                          isGlobalCapturing = false;
+                          renderNode.endRecording();
+                      }
+
+                      canvas.drawRenderNode(renderNode);
+                  }
+
+                  @Override
+                  public void setAlpha(int alpha) {}
+
+                  @Override
+                  public void setColorFilter(ColorFilter colorFilter) {}
+
+                  @Override
+                  public int getOpacity() {
+                      return PixelFormat.TRANSLUCENT;
+                  }
+              }
+          }
+          EOF
+
+      - name: Build Signed APK
+        run: gradle assembleDebug
+
+      - name: Upload Ready-to-Install APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClashMeta-LiquidGlass-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
