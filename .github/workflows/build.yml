@@ -1,4 +1,4 @@
-name: Build Clash Liquid Glass APK
+name: Build Clash Liquid Glass APK v2
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Generate Project & Liquid Glass Hook Source
+      - name: Generate Project & Fixed Liquid Glass Hook Source
         run: |
           mkdir -p app/src/main/java/com/example/clashliquidglass
           mkdir -p app/src/main/res/values
@@ -69,11 +69,12 @@ jobs:
                   applicationId "com.example.clashliquidglass"
                   minSdk 33
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "2.0"
               }
 
               compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
@@ -95,7 +96,7 @@ jobs:
                       android:value="true" />
                   <meta-data
                       android:name="xposeddescription"
-                      android:value="将 Clash Meta 菜单界面改造为 Kyant0 风格圆角矩形液态玻璃" />
+                      android:value="Clash Meta 圆角矩形液态玻璃模块 (v2.0 防闪退修复版)" />
                   <meta-data
                       android:name="xposedminversion"
                       android:value="93" />
@@ -124,17 +125,14 @@ jobs:
 
           import android.app.Activity;
           import android.content.Context;
+          import android.content.res.ColorStateList;
           import android.content.res.Configuration;
           import android.graphics.Canvas;
           import android.graphics.Color;
-          import android.graphics.ColorFilter;
           import android.graphics.LinearGradient;
           import android.graphics.Paint;
-          import android.graphics.PixelFormat;
           import android.graphics.RadialGradient;
-          import android.graphics.RecordingCanvas;
-          import android.graphics.RenderEffect;
-          import android.graphics.RenderNode;
+          import android.graphics.RectF;
           import android.graphics.RuntimeShader;
           import android.graphics.Shader;
           import android.graphics.drawable.ColorDrawable;
@@ -155,69 +153,125 @@ jobs:
           public class MainHook implements IXposedHookLoadPackage {
 
               private static final String TARGET_PACKAGE = "com.github.metacubex.clash.meta";
-              private static final int TAG_HOOKED = 0x7F0B8888;
-              private static final int TAG_AURORA_BG = 0x7F0B8889;
-              private static boolean isGlobalCapturing = false;
+              private static final int TAG_GLASS_TYPE = 0x7F0B8881; // 1 = Card, 2 = Label
+              private static final int TAG_IS_ACCENT  = 0x7F0B8882; // 蓝色运行中状态标记
+              private static final int TAG_DRAWER     = 0x7F0B8883;
+              private static final int TAG_AURORA_BG  = 0x7F0B8884;
 
-              private static final String LIQUID_GLASS_SHADER =
-                  "uniform shader backdrop;\n" +
+              // 严格遵循 Adreno SkSL 规范（全 float 运算，零 pow(0) NaN 风险，零 RenderNode 递归）
+              private static final String LIQUID_GLASS_AGSL =
                   "uniform float2 uSize;\n" +
+                  "uniform float2 uScreenPos;\n" +
+                  "uniform float2 uScreenSize;\n" +
+                  "uniform float2 uInset;\n" +
                   "uniform float uCornerRadius;\n" +
                   "uniform float uRefractionHeight;\n" +
                   "uniform float uRefractionAmount;\n" +
                   "uniform float uAberration;\n" +
                   "uniform float uIsDark;\n" +
+                  "uniform float uIsAccent;\n" +
                   "\n" +
                   "float sdRoundedBox(float2 p, float2 b, float r) {\n" +
                   "    float2 q = abs(p) - b + r;\n" +
-                  "    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;\n" +
+                  "    return min(max(q.x, q.y), 0.0) + length(max(q, float2(0.0, 0.0))) - r;\n" +
                   "}\n" +
                   "\n" +
                   "float2 calcNormal(float2 p, float2 b, float r) {\n" +
-                  "    const float eps = 1.0;\n" +
+                  "    float eps = 1.5;\n" +
                   "    float dx = sdRoundedBox(p + float2(eps, 0.0), b, r) - sdRoundedBox(p - float2(eps, 0.0), b, r);\n" +
                   "    float dy = sdRoundedBox(p + float2(0.0, eps), b, r) - sdRoundedBox(p - float2(0.0, eps), b, r);\n" +
-                  "    return normalize(float2(dx, dy) + float2(0.0001));\n" +
+                  "    return normalize(float2(dx, dy) + float2(0.0001, 0.0001));\n" +
+                  "}\n" +
+                  "\n" +
+                  "// 采样底层流光极光与光带场，供透镜边缘进行真实的物理折射与色散计算\n" +
+                  "float3 sampleBackdropField(float2 worldCoord, float2 scrSize, float isDark) {\n" +
+                  "    float2 uv = worldCoord / max(scrSize, float2(1.0, 1.0));\n" +
+                  "    float3 base = isDark > 0.5 ? float3(0.05, 0.07, 0.11) : float3(0.92, 0.95, 0.99);\n" +
+                  "    float3 c1 = isDark > 0.5 ? float3(0.18, 0.48, 0.96) : float3(0.38, 0.65, 0.98);\n" +
+                  "    float3 c2 = isDark > 0.5 ? float3(0.58, 0.28, 0.95) : float3(0.75, 0.52, 0.98);\n" +
+                  "    float3 c3 = isDark > 0.5 ? float3(0.06, 0.68, 0.52) : float3(0.20, 0.82, 0.62);\n" +
+                  "\n" +
+                  "    float d1 = length(uv - float2(0.20, 0.22));\n" +
+                  "    float d2 = length(uv - float2(0.85, 0.48));\n" +
+                  "    float d3 = length(uv - float2(0.28, 0.80));\n" +
+                  "\n" +
+                  "    float w1 = clamp(1.0 - d1 / 0.68, 0.0, 1.0);\n" +
+                  "    float w2 = clamp(1.0 - d2 / 0.65, 0.0, 1.0);\n" +
+                  "    float w3 = clamp(1.0 - d3 / 0.72, 0.0, 1.0);\n" +
+                  "\n" +
+                  "    // 叠加斜向流光波纹，让玻璃边缘的凸透镜扭曲肉眼清晰可见\n" +
+                  "    float wave = sin(uv.x * 18.0 + uv.y * 12.0) * 0.5 + 0.5;\n" +
+                  "    float3 col = base;\n" +
+                  "    col = mix(col, c1, w1 * w1 * 0.55);\n" +
+                  "    col = mix(col, c2, w2 * w2 * 0.50);\n" +
+                  "    col = mix(col, c3, w3 * w3 * 0.50);\n" +
+                  "    col += float3(0.06, 0.09, 0.14) * (wave * 0.35);\n" +
+                  "    return col;\n" +
                   "}\n" +
                   "\n" +
                   "half4 main(float2 coord) {\n" +
-                  "    float2 halfSize = uSize * 0.5;\n" +
-                  "    float2 centerPos = coord - halfSize;\n" +
-                  "    float dist = sdRoundedBox(centerPos, halfSize, uCornerRadius);\n" +
+                  "    float2 boxHalf = (uSize - uInset * 2.0) * 0.5;\n" +
+                  "    float2 centerPos = coord - uSize * 0.5;\n" +
+                  "    float dist = sdRoundedBox(centerPos, boxHalf, uCornerRadius);\n" +
                   "\n" +
-                  "    float alphaMask = 1.0 - smoothstep(-1.2, 0.5, dist);\n" +
-                  "    if (alphaMask <= 0.001) {\n" +
-                  "        return half4(0.0);\n" +
+                  "    float alphaMask = 1.0 - smoothstep(-1.0, 0.8, dist);\n" +
+                  "    if (alphaMask <= 0.002) {\n" +
+                  "        return half4(0.0, 0.0, 0.0, 0.0);\n" +
                   "    }\n" +
                   "\n" +
-                  "    float edgeFactor = clamp(1.0 + dist / uRefractionHeight, 0.0, 1.0);\n" +
-                  "    float lensCurve = edgeFactor * edgeFactor * (3.0 - 2.0 * edgeFactor);\n" +
+                  "    // 1. 距离圆角边缘的凸透镜曲率因子 (0.0 在中心, 1.0 在最外沿)\n" +
+                  "    float edgeFactor = clamp(1.0 + dist / max(uRefractionHeight, 1.0), 0.0, 1.0);\n" +
+                  "    float edge2 = edgeFactor * edgeFactor;\n" +
+                  "    float edge3 = edge2 * edgeFactor;\n" +
+                  "    float edge4 = edge2 * edge2;\n" +
+                  "    float lensCurve = edge2 * (3.0 - 2.0 * edgeFactor);\n" +
                   "\n" +
-                  "    float2 normal = calcNormal(centerPos, halfSize, uCornerRadius);\n" +
+                  "    // 2. 透镜法线与 RGB 三通道色散偏移采样\n" +
+                  "    float2 normal = calcNormal(centerPos, boxHalf, uCornerRadius);\n" +
                   "    float2 refractOffset = normal * lensCurve * uRefractionAmount;\n" +
+                  "    float2 worldPos = uScreenPos + coord;\n" +
                   "\n" +
-                  "    float2 uvR = clamp(coord - refractOffset * (1.0 + uAberration), float2(1.0), uSize - 1.0);\n" +
-                  "    float2 uvG = clamp(coord - refractOffset, float2(1.0), uSize - 1.0);\n" +
-                  "    float2 uvB = clamp(coord - refractOffset * (1.0 - uAberration), float2(1.0), uSize - 1.0);\n" +
+                  "    float r = sampleBackdropField(worldPos - refractOffset * (1.0 + uAberration), uScreenSize, uIsDark).r;\n" +
+                  "    float g = sampleBackdropField(worldPos - refractOffset, uScreenSize, uIsDark).g;\n" +
+                  "    float b = sampleBackdropField(worldPos - refractOffset * (1.0 - uAberration), uScreenSize, uIsDark).b;\n" +
+                  "    float3 refracted = float3(r, g, b);\n" +
                   "\n" +
-                  "    half r = backdrop.eval(uvR).r;\n" +
-                  "    half g = backdrop.eval(uvG).g;\n" +
-                  "    half b = backdrop.eval(uvB).b;\n" +
-                  "    half3 refractedColor = half3(r, g, b);\n" +
+                  "    // 3. 边缘彩虹色散光晕增强 (Chromatic Fringe)\n" +
+                  "    float3 rainbowFringe = float3(\n" +
+                  "        0.5 + 0.5 * normal.x,\n" +
+                  "        0.5 + 0.5 * normal.y,\n" +
+                  "        0.5 - 0.5 * normal.x\n" +
+                  "    ) * (edge3 * uAberration * 0.55);\n" +
                   "\n" +
-                  "    float lightAngle = dot(normal, normalize(float2(-0.6, -0.8))) * 0.5 + 0.5;\n" +
-                  "    float rimHighlight = pow(edgeFactor, 3.2) * (0.28 + 0.45 * lightAngle);\n" +
-                  "    half3 tintColor = uIsDark > 0.5 ? half3(0.16, 0.18, 0.24) : half3(0.95, 0.97, 1.0);\n" +
-                  "    float tintStrength = 0.18 + edgeFactor * 0.10;\n" +
+                  "    // 4. 液态玻璃表面通透底色（若为顶部「运行中」卡片则注入冰海蓝玻璃光泽）\n" +
+                  "    float3 baseGlassTint = uIsDark > 0.5 ? float3(0.75, 0.84, 0.98) : float3(1.0, 1.0, 1.0);\n" +
+                  "    float3 activeBlueTint = float3(0.22, 0.58, 1.0);\n" +
+                  "    float3 glassTint = mix(baseGlassTint, activeBlueTint, uIsAccent * 0.68);\n" +
+                  "    float surfaceFrost = (uIsDark > 0.5 ? 0.13 : 0.30) + uIsAccent * 0.16;\n" +
                   "\n" +
-                  "    half3 finalRGB = mix(refractedColor, tintColor, tintStrength) + half3(rimHighlight);\n" +
-                  "    return half4(finalRGB * alphaMask, alphaMask);\n" +
+                  "    // 5. 斜向表面光泽 + 3D 水滴内壁焦散 (Inner Meniscus) + 锐利高光边框 (Specular Rim)\n" +
+                  "    float2 uvNorm = centerPos / max(boxHalf, float2(1.0, 1.0));\n" +
+                  "    float surfaceSheen = clamp((1.0 - (uvNorm.x * 0.45 + uvNorm.y * 0.55)) * 0.5, 0.0, 1.0) * 0.09;\n" +
+                  "    float lightDir = dot(normal, normalize(float2(-0.65, -0.75))) * 0.5 + 0.5;\n" +
+                  "    float oppLightDir = dot(normal, normalize(float2(0.65, 0.75))) * 0.5 + 0.5;\n" +
+                  "    float specularAngle = max(lightDir, oppLightDir * 0.65);\n" +
+                  "\n" +
+                  "    float innerCushion = edge2 * (0.14 + 0.16 * specularAngle);\n" +
+                  "    float outerBorder = smoothstep(-2.4, -0.3, dist) * (0.32 + 0.52 * specularAngle);\n" +
+                  "\n" +
+                  "    float3 finalRGB = mix(refracted, glassTint, surfaceFrost)\n" +
+                  "                    + rainbowFringe\n" +
+                  "                    + float3(surfaceSheen + innerCushion + outerBorder);\n" +
+                  "    finalRGB = clamp(finalRGB, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0));\n" +
+                  "\n" +
+                  "    return half4(finalRGB.r, finalRGB.g, finalRGB.b, alphaMask);\n" +
                   "}\n";
 
               @Override
               public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
                   if (!TARGET_PACKAGE.equals(lpparam.packageName)) return;
 
+                  // 1. 注入底层极光流光背景并清除容器原本的不透明底色
                   XposedHelpers.findAndHookMethod(
                       Activity.class,
                       "onPostCreate",
@@ -225,48 +279,160 @@ jobs:
                       new XC_MethodHook() {
                           @Override
                           protected void afterHookedMethod(MethodHookParam param) {
-                              Activity activity = (Activity) param.thisObject;
-                              injectAuroraBackdrop(activity);
+                              try {
+                                  Activity activity = (Activity) param.thisObject;
+                                  injectAuroraBackdrop(activity);
+                              } catch (Throwable t) {
+                                  XposedBridge.log(t);
+                              }
                           }
                       }
                   );
 
-                  // 录制底层背景时跳过卡片自身绘制，防止文字重影与无限递归
+                  // 2. 拦截 MaterialCardView / CardView 的动态涂色（解决「运行中」和「配置」变回纯蓝/纯灰的问题）
+                  hookCardBackgroundColor(lpparam.classLoader, "androidx.cardview.widget.CardView");
+                  hookCardBackgroundColor(lpparam.classLoader, "com.google.android.material.card.MaterialCardView");
+
+                  // 3. 在 ViewGroup 绘制子控件文字/图标之前，直接在画布上绘制圆角矩形液态玻璃
                   XposedHelpers.findAndHookMethod(
-                      View.class,
-                      "draw",
+                      ViewGroup.class,
+                      "dispatchDraw",
                       Canvas.class,
                       new XC_MethodHook() {
                           @Override
                           protected void beforeHookedMethod(MethodHookParam param) {
-                              if (isGlobalCapturing) {
-                                  View v = (View) param.thisObject;
-                                  if (Boolean.TRUE.equals(v.getTag(TAG_HOOKED))) {
-                                      param.setResult(null);
+                              try {
+                                  View view = (View) param.thisObject;
+                                  Object typeObj = view.getTag(TAG_GLASS_TYPE);
+                                  if (!(typeObj instanceof Integer)) return;
+
+                                  // 确保自身默认背景始终透明
+                                  Drawable bg = view.getBackground();
+                                  if (bg != null && bg.getAlpha() != 0) {
+                                      bg.setAlpha(0);
                                   }
+
+                                  LiquidGlassDrawer drawer = (LiquidGlassDrawer) view.getTag(TAG_DRAWER);
+                                  if (drawer == null) {
+                                      drawer = new LiquidGlassDrawer(view.getContext());
+                                      view.setTag(TAG_DRAWER, drawer);
+                                  }
+
+                                  Canvas canvas = (Canvas) param.args[0];
+                                  int glassType = (Integer) typeObj;
+                                  boolean isAccent = Boolean.TRUE.equals(view.getTag(TAG_IS_ACCENT));
+                                  drawer.draw(view, canvas, glassType, isAccent);
+                              } catch (Throwable t) {
+                                  XposedBridge.log(t);
                               }
                           }
                       }
                   );
 
-                  String[] targetClasses = new String[]{
-                      "com.github.kr328.clash.design.view.LargeActionCard",
-                      "com.github.kr328.clash.design.view.LargeActionLabel",
-                      "com.github.kr328.clash.design.view.ActionLabel",
-                      "com.github.kr328.clash.design.view.ActionTextField"
-                  };
+                  // 4. 精准标记 Clash Meta 所有菜单卡片与条目
+                  hookTargetClass(lpparam.classLoader, "com.github.kr328.clash.design.view.LargeActionCard", 1);
+                  hookTargetClass(lpparam.classLoader, "com.github.kr328.clash.design.view.LargeActionLabel", 2);
+                  hookTargetClass(lpparam.classLoader, "com.github.kr328.clash.design.view.ActionLabel", 2);
+                  hookTargetClass(lpparam.classLoader, "com.github.kr328.clash.design.view.ActionTextField", 2);
+              }
 
-                  for (String className : targetClasses) {
-                      Class<?> clazz = XposedHelpers.findClassIfExists(className, lpparam.classLoader);
-                      if (clazz != null) {
-                          XposedBridge.hookAllConstructors(clazz, new XC_MethodHook() {
-                              @Override
-                              protected void afterHookedMethod(MethodHookParam param) {
-                                  final View view = (View) param.thisObject;
-                                  view.post(() -> transformToLiquidGlassCard(view));
+              private void hookCardBackgroundColor(ClassLoader classLoader, String className) {
+                  Class<?> cardClass = XposedHelpers.findClassIfExists(className, classLoader);
+                  if (cardClass == null) return;
+
+                  XposedHelpers.findAndHookMethod(
+                      cardClass,
+                      "setCardBackgroundColor",
+                      int.class,
+                      new XC_MethodHook() {
+                          @Override
+                          protected void beforeHookedMethod(MethodHookParam param) {
+                              View v = (View) param.thisObject;
+                              if (v.getTag(TAG_GLASS_TYPE) != null ||
+                                  v.getClass().getName().endsWith("LargeActionCard")) {
+                                  int color = (Integer) param.args[0];
+                                  updateAccentTagFromColor(v, color);
+                                  param.args[0] = Color.TRANSPARENT;
                               }
-                          });
+                          }
                       }
+                  );
+
+                  XposedHelpers.findAndHookMethod(
+                      cardClass,
+                      "setCardBackgroundColor",
+                      ColorStateList.class,
+                      new XC_MethodHook() {
+                          @Override
+                          protected void beforeHookedMethod(MethodHookParam param) {
+                              View v = (View) param.thisObject;
+                              if (v.getTag(TAG_GLASS_TYPE) != null ||
+                                  v.getClass().getName().endsWith("LargeActionCard")) {
+                                  ColorStateList csl = (ColorStateList) param.args[0];
+                                  if (csl != null) {
+                                      updateAccentTagFromColor(v, csl.getDefaultColor());
+                                  }
+                                  param.args[0] = ColorStateList.valueOf(Color.TRANSPARENT);
+                              }
+                          }
+                      }
+                  );
+              }
+
+              // 判断卡片原本是否被赋予了高饱和度的主题蓝色（如「运行中」卡片）
+              private void updateAccentTagFromColor(View v, int color) {
+                  if (color == Color.TRANSPARENT) return;
+                  float[] hsv = new float[3];
+                  Color.colorToHSV(color, hsv);
+                  boolean isVibrantAccent = hsv[1] > 0.35f && hsv[2] > 0.35f;
+                  v.setTag(TAG_IS_ACCENT, isVibrantAccent);
+              }
+
+              private void hookTargetClass(ClassLoader cl, String className, final int glassType) {
+                  Class<?> clazz = XposedHelpers.findClassIfExists(className, cl);
+                  if (clazz == null) return;
+
+                  XposedBridge.hookAllConstructors(clazz, new XC_MethodHook() {
+                      @Override
+                      protected void afterHookedMethod(MethodHookParam param) {
+                          final View view = (View) param.thisObject;
+                          view.setTag(TAG_GLASS_TYPE, glassType);
+                          view.post(() -> prepareGlassView(view, glassType));
+                      }
+                  });
+              }
+
+              private void prepareGlassView(View targetView, int glassType) {
+                  try {
+                      targetView.setWillNotDraw(false);
+                      targetView.setClipToOutline(false);
+                      if (targetView instanceof ViewGroup) {
+                          ((ViewGroup) targetView).setClipChildren(false);
+                          ((ViewGroup) targetView).setClipToPadding(false);
+                      }
+
+                      if (glassType == 1) {
+                          // 针对 LargeActionCard (MaterialCardView) 移除默认实心底色与阴影边框
+                          try {
+                              Object cslObj = XposedHelpers.callMethod(targetView, "getCardBackgroundColor");
+                              if (cslObj instanceof ColorStateList) {
+                                  updateAccentTagFromColor(targetView, ((ColorStateList) cslObj).getDefaultColor());
+                              }
+                          } catch (Throwable ignored) {}
+                          try {
+                              XposedHelpers.callMethod(targetView, "setCardBackgroundColor", Color.TRANSPARENT);
+                              XposedHelpers.callMethod(targetView, "setCardElevation", 0f);
+                              XposedHelpers.callMethod(targetView, "setMaxCardElevation", 0f);
+                              XposedHelpers.callMethod(targetView, "setStrokeWidth", 0);
+                          } catch (Throwable ignored) {}
+                      }
+
+                      if (targetView.getBackground() != null) {
+                          targetView.getBackground().setAlpha(0);
+                      }
+                      targetView.invalidate();
+                  } catch (Throwable t) {
+                      XposedBridge.log(t);
                   }
               }
 
@@ -301,7 +467,7 @@ jobs:
                   for (int i = 0; i < group.getChildCount(); i++) {
                       View child = group.getChildAt(i);
                       if (Boolean.TRUE.equals(child.getTag(TAG_AURORA_BG)) ||
-                          Boolean.TRUE.equals(child.getTag(TAG_HOOKED))) {
+                          child.getTag(TAG_GLASS_TYPE) != null) {
                           continue;
                       }
                       String clsName = child.getClass().getName();
@@ -320,7 +486,7 @@ jobs:
               private void invalidateAllGlassViews(ViewGroup group) {
                   for (int i = 0; i < group.getChildCount(); i++) {
                       View child = group.getChildAt(i);
-                      if (Boolean.TRUE.equals(child.getTag(TAG_HOOKED))) {
+                      if (child.getTag(TAG_GLASS_TYPE) != null) {
                           child.invalidate();
                       } else if (child instanceof ViewGroup) {
                           invalidateAllGlassViews((ViewGroup) child);
@@ -328,44 +494,12 @@ jobs:
                   }
               }
 
-              private void transformToLiquidGlassCard(View targetView) {
-                  if (Boolean.TRUE.equals(targetView.getTag(TAG_HOOKED))) return;
-                  targetView.setTag(TAG_HOOKED, Boolean.TRUE);
-
-                  Context context = targetView.getContext();
-                  View root = targetView.getRootView();
-                  if (!(root instanceof ViewGroup)) return;
-                  ViewGroup rootView = (ViewGroup) root;
-
-                  try {
-                      XposedHelpers.callMethod(targetView, "setCardBackgroundColor", Color.TRANSPARENT);
-                      XposedHelpers.callMethod(targetView, "setCardElevation", 0f);
-                  } catch (Throwable ignored) {}
-
-                  ViewGroup.LayoutParams lp = targetView.getLayoutParams();
-                  if (lp instanceof ViewGroup.MarginLayoutParams) {
-                      ViewGroup.MarginLayoutParams mlp = (ViewGroup.MarginLayoutParams) lp;
-                      int hMargin = dpToPx(context, 16f);
-                      int vMargin = dpToPx(context, 6f);
-                      if (mlp.leftMargin < hMargin) {
-                          mlp.setMargins(hMargin, vMargin, hMargin, vMargin);
-                          targetView.setLayoutParams(mlp);
-                      }
-                  }
-
-                  targetView.setBackground(new LiquidGlassDrawable(
-                      context, rootView, targetView, dpToPx(context, 24f)
-                  ));
-                  targetView.setClipToOutline(false);
-              }
-
-              private static int dpToPx(Context context, float dp) {
-                  return (int) TypedValue.applyDimension(
+              private static float dpToPx(Context context, float dp) {
+                  return TypedValue.applyDimension(
                       TypedValue.COMPLEX_UNIT_DIP, dp, context.getResources().getDisplayMetrics()
                   );
               }
 
-              // 提供丰富色彩层次的液态流光底层画布，使玻璃边缘折射和色散清晰可见
               private static class AuroraBackdropView extends View {
                   private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
@@ -383,14 +517,14 @@ jobs:
                       boolean isDark = (getResources().getConfiguration().uiMode &
                           Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
 
-                      canvas.drawColor(isDark ? Color.parseColor("#0D1117") : Color.parseColor("#EEF2F9"));
+                      canvas.drawColor(isDark ? Color.parseColor("#0D111C") : Color.parseColor("#EAF0FB"));
 
-                      int c1 = isDark ? Color.parseColor("#553B82F6") : Color.parseColor("#6660A5FA");
-                      int c2 = isDark ? Color.parseColor("#558B5CF6") : Color.parseColor("#66C084FC");
-                      int c3 = isDark ? Color.parseColor("#5510B981") : Color.parseColor("#6634D399");
+                      int c1 = isDark ? Color.parseColor("#662E7CF6") : Color.parseColor("#7760A5FA");
+                      int c2 = isDark ? Color.parseColor("#669347F5") : Color.parseColor("#77C084FC");
+                      int c3 = isDark ? Color.parseColor("#6610B981") : Color.parseColor("#7734D399");
 
                       paint.setShader(new RadialGradient(
-                          w * 0.2f, h * 0.22f, w * 0.7f, c1, Color.TRANSPARENT, Shader.TileMode.CLAMP
+                          w * 0.20f, h * 0.22f, w * 0.68f, c1, Color.TRANSPARENT, Shader.TileMode.CLAMP
                       ));
                       canvas.drawRect(0, 0, w, h, paint);
 
@@ -400,85 +534,89 @@ jobs:
                       canvas.drawRect(0, 0, w, h, paint);
 
                       paint.setShader(new RadialGradient(
-                          w * 0.3f, h * 0.8f, w * 0.75f, c3, Color.TRANSPARENT, Shader.TileMode.CLAMP
+                          w * 0.28f, h * 0.80f, w * 0.72f, c3, Color.TRANSPARENT, Shader.TileMode.CLAMP
                       ));
                       canvas.drawRect(0, 0, w, h, paint);
                   }
               }
 
-              private static class LiquidGlassDrawable extends Drawable {
-                  private final RuntimeShader runtimeShader = new RuntimeShader(LIQUID_GLASS_SHADER);
-                  private final RenderNode renderNode = new RenderNode("ClashMetaLiquidGlass");
-                  private final ViewGroup rootView;
-                  private final View hostView;
-                  private final float cornerRadiusPx;
-                  private final float blurRadiusPx;
-                  private final float refractionHeightPx;
-                  private final float refractionAmountPx;
-                  private final float isDarkFlag;
+              private static class LiquidGlassDrawer {
+                  private RuntimeShader runtimeShader;
+                  private final Paint shaderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  private final Paint fallbackFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  private final Paint fallbackStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  private final RectF rectF = new RectF();
                   private final int[] locationTemp = new int[2];
 
-                  public LiquidGlassDrawable(Context context, ViewGroup rootView, View hostView, float cornerRadiusPx) {
-                      this.rootView = rootView;
-                      this.hostView = hostView;
-                      this.cornerRadiusPx = cornerRadiusPx;
-                      this.blurRadiusPx = dpToPx(context, 12f);
+                  private final float cornerRadiusPx;
+                  private final float refractionHeightPx;
+                  private final float refractionAmountPx;
+                  private final float labelInsetXPx;
+                  private final float labelInsetYPx;
+                  private final float screenW;
+                  private final float screenH;
+
+                  public LiquidGlassDrawer(Context context) {
+                      this.cornerRadiusPx = dpToPx(context, 24f);
                       this.refractionHeightPx = dpToPx(context, 24f);
-                      this.refractionAmountPx = dpToPx(context, 30f);
-                      boolean isDark = (context.getResources().getConfiguration().uiMode &
-                          Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-                      this.isDarkFlag = isDark ? 1.0f : 0.0f;
+                      this.refractionAmountPx = dpToPx(context, 38f);
+                      this.labelInsetXPx = dpToPx(context, 16f);
+                      this.labelInsetYPx = dpToPx(context, 5f);
+                      this.screenW = context.getResources().getDisplayMetrics().widthPixels;
+                      this.screenH = context.getResources().getDisplayMetrics().heightPixels;
+
+                      try {
+                          this.runtimeShader = new RuntimeShader(LIQUID_GLASS_AGSL);
+                      } catch (Throwable t) {
+                          XposedBridge.log("LiquidGlass AGSL init error: " + t.getMessage());
+                          this.runtimeShader = null;
+                      }
                   }
 
-                  @Override
-                  public void draw(Canvas canvas) {
-                      if (isGlobalCapturing || !canvas.isHardwareAccelerated()) return;
-                      int w = getBounds().width();
-                      int h = getBounds().height();
+                  public void draw(View view, Canvas canvas, int glassType, boolean isAccent) {
+                      int w = view.getWidth();
+                      int h = view.getHeight();
                       if (w <= 0 || h <= 0) return;
 
-                      runtimeShader.setFloatUniform("uSize", (float) w, (float) h);
-                      runtimeShader.setFloatUniform("uCornerRadius", cornerRadiusPx);
-                      runtimeShader.setFloatUniform("uRefractionHeight", refractionHeightPx);
-                      runtimeShader.setFloatUniform("uRefractionAmount", refractionAmountPx);
-                      runtimeShader.setFloatUniform("uAberration", 0.25f);
-                      runtimeShader.setFloatUniform("uIsDark", isDarkFlag);
+                      // LargeActionCard 已自带 16dp 外边距；LargeActionLabel 内缩 16dp 与上方卡片严丝合缝对齐
+                      float insetX = (glassType == 2) ? labelInsetXPx : 0f;
+                      float insetY = (glassType == 2) ? labelInsetYPx : 0f;
 
-                      RenderEffect blurEffect = RenderEffect.createBlurEffect(
-                          blurRadiusPx, blurRadiusPx, Shader.TileMode.CLAMP
-                      );
-                      RenderEffect lensEffect = RenderEffect.createRuntimeShaderEffect(
-                          runtimeShader, "backdrop"
-                      );
-                      RenderEffect combined = RenderEffect.createChainEffect(lensEffect, blurEffect);
+                      boolean isDark = (view.getResources().getConfiguration().uiMode &
+                          Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
 
-                      renderNode.setPosition(0, 0, w, h);
-                      renderNode.setRenderEffect(combined);
+                      if (runtimeShader != null && canvas.isHardwareAccelerated()) {
+                          view.getLocationOnScreen(locationTemp);
 
-                      hostView.getLocationInWindow(locationTemp);
-                      RecordingCanvas recCanvas = renderNode.beginRecording(w, h);
-                      recCanvas.translate(-locationTemp[0], -locationTemp[1]);
+                          runtimeShader.setFloatUniform("uSize", (float) w, (float) h);
+                          runtimeShader.setFloatUniform("uScreenPos", (float) locationTemp[0], (float) locationTemp[1]);
+                          runtimeShader.setFloatUniform("uScreenSize", screenW, screenH);
+                          runtimeShader.setFloatUniform("uInset", insetX, insetY);
+                          runtimeShader.setFloatUniform("uCornerRadius", cornerRadiusPx);
+                          runtimeShader.setFloatUniform("uRefractionHeight", refractionHeightPx);
+                          runtimeShader.setFloatUniform("uRefractionAmount", refractionAmountPx);
+                          runtimeShader.setFloatUniform("uAberration", 0.30f);
+                          runtimeShader.setFloatUniform("uIsDark", isDark ? 1.0f : 0.0f);
+                          runtimeShader.setFloatUniform("uIsAccent", isAccent ? 1.0f : 0.0f);
 
-                      isGlobalCapturing = true;
-                      try {
-                          rootView.draw(recCanvas);
-                      } finally {
-                          isGlobalCapturing = false;
-                          renderNode.endRecording();
+                          shaderPaint.setShader(runtimeShader);
+                          canvas.drawRect(0, 0, w, h, shaderPaint);
+                      } else {
+                          // 兜底绘制：即使极端情况下不支持 AGSL，也能展示高光玻璃圆角胶囊
+                          rectF.set(insetX, insetY, w - insetX, h - insetY);
+                          fallbackFillPaint.setColor(isAccent ? 0x443B82F6 : (isDark ? 0x33FFFFFF : 0x66FFFFFF));
+                          canvas.drawRoundRect(rectF, cornerRadiusPx, cornerRadiusPx, fallbackFillPaint);
+
+                          fallbackStrokePaint.setStyle(Paint.Style.STROKE);
+                          fallbackStrokePaint.setStrokeWidth(dpToPx(view.getContext(), 1.2f));
+                          fallbackStrokePaint.setShader(new LinearGradient(
+                              rectF.left, rectF.top, rectF.right, rectF.bottom,
+                              new int[]{0xBBFFFFFF, 0x22FFFFFF, 0x88FFFFFF},
+                              new float[]{0f, 0.5f, 1f},
+                              Shader.TileMode.CLAMP
+                          ));
+                          canvas.drawRoundRect(rectF, cornerRadiusPx, cornerRadiusPx, fallbackStrokePaint);
                       }
-
-                      canvas.drawRenderNode(renderNode);
-                  }
-
-                  @Override
-                  public void setAlpha(int alpha) {}
-
-                  @Override
-                  public void setColorFilter(ColorFilter colorFilter) {}
-
-                  @Override
-                  public int getOpacity() {
-                      return PixelFormat.TRANSLUCENT;
                   }
               }
           }
@@ -490,5 +628,5 @@ jobs:
       - name: Upload Ready-to-Install APK
         uses: actions/upload-artifact@v4
         with:
-          name: ClashMeta-LiquidGlass-APK
+          name: ClashMeta-LiquidGlass-v2-APK
           path: app/build/outputs/apk/debug/app-debug.apk
