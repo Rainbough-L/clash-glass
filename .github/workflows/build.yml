@@ -1,4 +1,4 @@
-name: Build Clash Liquid Glass APK v2
+name: Build Clash Liquid Glass APK v3
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Generate Project & Fixed Liquid Glass Hook Source
+      - name: Generate Project & Soft Pill Liquid Glass Source
         run: |
           mkdir -p app/src/main/java/com/example/clashliquidglass
           mkdir -p app/src/main/res/values
@@ -69,12 +69,11 @@ jobs:
                   applicationId "com.example.clashliquidglass"
                   minSdk 33
                   targetSdk 34
-                  versionCode 2
-                  versionName "2.0"
+                  versionCode 3
+                  versionName "3.0"
               }
 
               compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
@@ -96,7 +95,7 @@ jobs:
                       android:value="true" />
                   <meta-data
                       android:name="xposeddescription"
-                      android:value="Clash Meta 圆角矩形液态玻璃模块 (v2.0 防闪退修复版)" />
+                      android:value="Clash Meta 柔润胶囊液态玻璃模块 (v3.0 仿底栏温润质感版)" />
                   <meta-data
                       android:name="xposedminversion"
                       android:value="93" />
@@ -153,21 +152,21 @@ jobs:
           public class MainHook implements IXposedHookLoadPackage {
 
               private static final String TARGET_PACKAGE = "com.github.metacubex.clash.meta";
-              private static final int TAG_GLASS_TYPE = 0x7F0B8881; // 1 = Card, 2 = Label
-              private static final int TAG_IS_ACCENT  = 0x7F0B8882; // 蓝色运行中状态标记
+              private static final int TAG_GLASS_TYPE = 0x7F0B8881; // 1 = Card, 2 = Pill Label
+              private static final int TAG_IS_ACCENT  = 0x7F0B8882;
               private static final int TAG_DRAWER     = 0x7F0B8883;
               private static final int TAG_AURORA_BG  = 0x7F0B8884;
 
-              // 严格遵循 Adreno SkSL 规范（全 float 运算，零 pow(0) NaN 风险，零 RenderNode 递归）
+              // 1:1 复刻参考图底栏的柔润胶囊液态玻璃着色器：
+              // 乳白珍珠柔雾中心 + 余弦平滑宽边水滴折光带 + 左侧内嵌次级暗色胶囊 + 细腻纯白包边
               private static final String LIQUID_GLASS_AGSL =
                   "uniform float2 uSize;\n" +
                   "uniform float2 uScreenPos;\n" +
                   "uniform float2 uScreenSize;\n" +
                   "uniform float2 uInset;\n" +
                   "uniform float uCornerRadius;\n" +
-                  "uniform float uRefractionHeight;\n" +
+                  "uniform float uBevelWidth;\n" +
                   "uniform float uRefractionAmount;\n" +
-                  "uniform float uAberration;\n" +
                   "uniform float uIsDark;\n" +
                   "uniform float uIsAccent;\n" +
                   "\n" +
@@ -177,101 +176,107 @@ jobs:
                   "}\n" +
                   "\n" +
                   "float2 calcNormal(float2 p, float2 b, float r) {\n" +
-                  "    float eps = 1.5;\n" +
+                  "    float eps = 2.0;\n" +
                   "    float dx = sdRoundedBox(p + float2(eps, 0.0), b, r) - sdRoundedBox(p - float2(eps, 0.0), b, r);\n" +
                   "    float dy = sdRoundedBox(p + float2(0.0, eps), b, r) - sdRoundedBox(p - float2(0.0, eps), b, r);\n" +
                   "    return normalize(float2(dx, dy) + float2(0.0001, 0.0001));\n" +
                   "}\n" +
                   "\n" +
-                  "// 采样底层流光极光与光带场，供透镜边缘进行真实的物理折射与色散计算\n" +
-                  "float3 sampleBackdropField(float2 worldCoord, float2 scrSize, float isDark) {\n" +
+                  "// 柔和弥散的底层环境光场（提供自然柔润的透光层次，彻底去除生硬波纹）\n" +
+                  "float3 sampleRawField(float2 worldCoord, float2 scrSize, float isDark) {\n" +
                   "    float2 uv = worldCoord / max(scrSize, float2(1.0, 1.0));\n" +
-                  "    float3 base = isDark > 0.5 ? float3(0.05, 0.07, 0.11) : float3(0.92, 0.95, 0.99);\n" +
-                  "    float3 c1 = isDark > 0.5 ? float3(0.18, 0.48, 0.96) : float3(0.38, 0.65, 0.98);\n" +
-                  "    float3 c2 = isDark > 0.5 ? float3(0.58, 0.28, 0.95) : float3(0.75, 0.52, 0.98);\n" +
-                  "    float3 c3 = isDark > 0.5 ? float3(0.06, 0.68, 0.52) : float3(0.20, 0.82, 0.62);\n" +
+                  "    float3 base = isDark > 0.5 ? float3(0.18, 0.21, 0.26) : float3(0.88, 0.91, 0.95);\n" +
+                  "    float3 c1 = isDark > 0.5 ? float3(0.32, 0.62, 0.92) : float3(0.55, 0.78, 0.98);\n" +
+                  "    float3 c2 = isDark > 0.5 ? float3(0.24, 0.76, 0.58) : float3(0.48, 0.88, 0.70);\n" +
+                  "    float3 c3 = isDark > 0.5 ? float3(0.58, 0.52, 0.88) : float3(0.82, 0.76, 0.96);\n" +
                   "\n" +
-                  "    float d1 = length(uv - float2(0.20, 0.22));\n" +
-                  "    float d2 = length(uv - float2(0.85, 0.48));\n" +
-                  "    float d3 = length(uv - float2(0.28, 0.80));\n" +
+                  "    float w1 = smoothstep(0.75, 0.0, length(uv - float2(0.22, 0.20)));\n" +
+                  "    float w2 = smoothstep(0.72, 0.0, length(uv - float2(0.78, 0.46)));\n" +
+                  "    float w3 = smoothstep(0.78, 0.0, length(uv - float2(0.32, 0.82)));\n" +
                   "\n" +
-                  "    float w1 = clamp(1.0 - d1 / 0.68, 0.0, 1.0);\n" +
-                  "    float w2 = clamp(1.0 - d2 / 0.65, 0.0, 1.0);\n" +
-                  "    float w3 = clamp(1.0 - d3 / 0.72, 0.0, 1.0);\n" +
-                  "\n" +
-                  "    // 叠加斜向流光波纹，让玻璃边缘的凸透镜扭曲肉眼清晰可见\n" +
-                  "    float wave = sin(uv.x * 18.0 + uv.y * 12.0) * 0.5 + 0.5;\n" +
                   "    float3 col = base;\n" +
-                  "    col = mix(col, c1, w1 * w1 * 0.55);\n" +
-                  "    col = mix(col, c2, w2 * w2 * 0.50);\n" +
-                  "    col = mix(col, c3, w3 * w3 * 0.50);\n" +
-                  "    col += float3(0.06, 0.09, 0.14) * (wave * 0.35);\n" +
+                  "    col = mix(col, c1, w1 * 0.52);\n" +
+                  "    col = mix(col, c2, w2 * 0.46);\n" +
+                  "    col = mix(col, c3, w3 * 0.44);\n" +
                   "    return col;\n" +
+                  "}\n" +
+                  "\n" +
+                  "// 5点高斯柔雾采样，模拟磨砂玻璃的柔和散射\n" +
+                  "float3 sampleBlurredBackdrop(float2 worldCoord, float2 scrSize, float isDark, float spread) {\n" +
+                  "    float3 c0 = sampleRawField(worldCoord, scrSize, isDark) * 0.40;\n" +
+                  "    float3 c1 = sampleRawField(worldCoord + float2(spread, spread), scrSize, isDark) * 0.15;\n" +
+                  "    float3 c2 = sampleRawField(worldCoord + float2(-spread, spread), scrSize, isDark) * 0.15;\n" +
+                  "    float3 c3 = sampleRawField(worldCoord + float2(spread, -spread), scrSize, isDark) * 0.15;\n" +
+                  "    float3 c4 = sampleRawField(worldCoord + float2(-spread, -spread), scrSize, isDark) * 0.15;\n" +
+                  "    return c0 + c1 + c2 + c3 + c4;\n" +
                   "}\n" +
                   "\n" +
                   "half4 main(float2 coord) {\n" +
                   "    float2 boxHalf = (uSize - uInset * 2.0) * 0.5;\n" +
                   "    float2 centerPos = coord - uSize * 0.5;\n" +
-                  "    float dist = sdRoundedBox(centerPos, boxHalf, uCornerRadius);\n" +
+                  "    float radius = min(uCornerRadius, min(boxHalf.x, boxHalf.y));\n" +
+                  "    float dist = sdRoundedBox(centerPos, boxHalf, radius);\n" +
                   "\n" +
-                  "    float alphaMask = 1.0 - smoothstep(-1.0, 0.8, dist);\n" +
+                  "    // 1. 抗锯齿平滑胶囊外缘裁剪\n" +
+                  "    float alphaMask = 1.0 - smoothstep(-1.2, 0.6, dist);\n" +
                   "    if (alphaMask <= 0.002) {\n" +
                   "        return half4(0.0, 0.0, 0.0, 0.0);\n" +
                   "    }\n" +
                   "\n" +
-                  "    // 1. 距离圆角边缘的凸透镜曲率因子 (0.0 在中心, 1.0 在最外沿)\n" +
-                  "    float edgeFactor = clamp(1.0 + dist / max(uRefractionHeight, 1.0), 0.0, 1.0);\n" +
-                  "    float edge2 = edgeFactor * edgeFactor;\n" +
-                  "    float edge3 = edge2 * edgeFactor;\n" +
-                  "    float edge4 = edge2 * edge2;\n" +
-                  "    float lensCurve = edge2 * (3.0 - 2.0 * edgeFactor);\n" +
+                  "    // 2. 余弦曲线平滑水滴边缘（0.0 在胶囊内部，1.0 在最外圈弧边，过渡极其柔顺）\n" +
+                  "    float edgeLinear = clamp(1.0 + dist / max(uBevelWidth, 1.0), 0.0, 1.0);\n" +
+                  "    float meniscus = 0.5 - 0.5 * cos(edgeLinear * 3.1415926);\n" +
+                  "    float meniscus2 = meniscus * meniscus;\n" +
                   "\n" +
-                  "    // 2. 透镜法线与 RGB 三通道色散偏移采样\n" +
-                  "    float2 normal = calcNormal(centerPos, boxHalf, uCornerRadius);\n" +
-                  "    float2 refractOffset = normal * lensCurve * uRefractionAmount;\n" +
+                  "    // 3. 边缘液态凸透镜温和折射与极轻微光学色散\n" +
+                  "    float2 normal = calcNormal(centerPos, boxHalf, radius);\n" +
+                  "    float2 refractOffset = normal * meniscus2 * uRefractionAmount;\n" +
                   "    float2 worldPos = uScreenPos + coord;\n" +
+                  "    float blurSpread = 18.0 * (1.0 - meniscus * 0.5);\n" +
                   "\n" +
-                  "    float r = sampleBackdropField(worldPos - refractOffset * (1.0 + uAberration), uScreenSize, uIsDark).r;\n" +
-                  "    float g = sampleBackdropField(worldPos - refractOffset, uScreenSize, uIsDark).g;\n" +
-                  "    float b = sampleBackdropField(worldPos - refractOffset * (1.0 - uAberration), uScreenSize, uIsDark).b;\n" +
-                  "    float3 refracted = float3(r, g, b);\n" +
+                  "    float r = sampleBlurredBackdrop(worldPos - refractOffset * 1.06, uScreenSize, uIsDark, blurSpread).r;\n" +
+                  "    float g = sampleBlurredBackdrop(worldPos - refractOffset, uScreenSize, uIsDark, blurSpread).g;\n" +
+                  "    float b = sampleBlurredBackdrop(worldPos - refractOffset * 0.94, uScreenSize, uIsDark, blurSpread).b;\n" +
+                  "    float3 backdropCol = float3(r, g, b);\n" +
                   "\n" +
-                  "    // 3. 边缘彩虹色散光晕增强 (Chromatic Fringe)\n" +
-                  "    float3 rainbowFringe = float3(\n" +
-                  "        0.5 + 0.5 * normal.x,\n" +
-                  "        0.5 + 0.5 * normal.y,\n" +
-                  "        0.5 - 0.5 * normal.x\n" +
-                  "    ) * (edge3 * uAberration * 0.55);\n" +
+                  "    // 4. 调配参考图同款的「乳白珍珠柔雾」玻璃基底（兼顾白色文字对比度与温润胶质感）\n" +
+                  "    float3 milkyFrosted = uIsDark > 0.5 ? float3(0.56, 0.60, 0.66) : float3(0.87, 0.89, 0.92);\n" +
+                  "    float3 activeGreenBlue = float3(0.20, 0.66, 0.52);\n" +
+                  "    float3 glassBodyTint = mix(milkyFrosted, activeGreenBlue, uIsAccent * 0.58);\n" +
+                  "    float frostWeight = uIsDark > 0.5 ? 0.54 : 0.68;\n" +
+                  "    float3 glassColor = mix(backdropCol, glassBodyTint, frostWeight);\n" +
                   "\n" +
-                  "    // 4. 液态玻璃表面通透底色（若为顶部「运行中」卡片则注入冰海蓝玻璃光泽）\n" +
-                  "    float3 baseGlassTint = uIsDark > 0.5 ? float3(0.75, 0.84, 0.98) : float3(1.0, 1.0, 1.0);\n" +
-                  "    float3 activeBlueTint = float3(0.22, 0.58, 1.0);\n" +
-                  "    float3 glassTint = mix(baseGlassTint, activeBlueTint, uIsAccent * 0.68);\n" +
-                  "    float surfaceFrost = (uIsDark > 0.5 ? 0.13 : 0.30) + uIsAccent * 0.16;\n" +
+                  "    // 5. 复刻参考图左侧「首页」的内嵌柔灰小胶囊阴影衬底（位于左侧图标与文字区）\n" +
+                  "    float innerPillW = min(boxHalf.x * 0.36, boxHalf.y * 1.45);\n" +
+                  "    float innerPillH = boxHalf.y * 0.78;\n" +
+                  "    float2 innerPillCenter = float2(-boxHalf.x + innerPillW + boxHalf.y * 0.22, 0.0);\n" +
+                  "    float innerDist = sdRoundedBox(centerPos - innerPillCenter, float2(innerPillW, innerPillH), innerPillH);\n" +
+                  "    float innerPillMask = 1.0 - smoothstep(-1.5, 1.5, innerDist);\n" +
+                  "    glassColor = mix(glassColor, glassColor * 0.82, innerPillMask * 0.55);\n" +
                   "\n" +
-                  "    // 5. 斜向表面光泽 + 3D 水滴内壁焦散 (Inner Meniscus) + 锐利高光边框 (Specular Rim)\n" +
-                  "    float2 uvNorm = centerPos / max(boxHalf, float2(1.0, 1.0));\n" +
-                  "    float surfaceSheen = clamp((1.0 - (uvNorm.x * 0.45 + uvNorm.y * 0.55)) * 0.5, 0.0, 1.0) * 0.09;\n" +
-                  "    float lightDir = dot(normal, normalize(float2(-0.65, -0.75))) * 0.5 + 0.5;\n" +
-                  "    float oppLightDir = dot(normal, normalize(float2(0.65, 0.75))) * 0.5 + 0.5;\n" +
-                  "    float specularAngle = max(lightDir, oppLightDir * 0.65);\n" +
+                  "    // 6. 水滴内壁立体折光环（参考图右侧边缘的柔白厚玻璃内反光 + 浅凹槽）\n" +
+                  "    float grooveBand = sin(edgeLinear * 3.1415926);\n" +
+                  "    float sideCurveBoost = 0.4 + 0.6 * abs(normal.x);\n" +
+                  "    float innerMeniscusGlow = grooveBand * grooveBand * (0.20 + 0.18 * sideCurveBoost);\n" +
+                  "    float innerSubtleShade = smoothstep(0.15, 0.55, edgeLinear) * (1.0 - smoothstep(0.55, 0.90, edgeLinear)) * 0.07;\n" +
                   "\n" +
-                  "    float innerCushion = edge2 * (0.14 + 0.16 * specularAngle);\n" +
-                  "    float outerBorder = smoothstep(-2.4, -0.3, dist) * (0.32 + 0.52 * specularAngle);\n" +
+                  "    // 7. 顶部漫反射柔光与最外圈细腻纯白高光包边（Crisp Specular White Rim）\n" +
+                  "    float topLight = clamp(-normal.y * 0.5 + 0.5, 0.0, 1.0);\n" +
+                  "    float rimThickness = smoothstep(-3.2, -0.4, dist);\n" +
+                  "    float whiteRim = rimThickness * (0.42 + 0.38 * max(topLight, abs(normal.x) * 0.85));\n" +
                   "\n" +
-                  "    float3 finalRGB = mix(refracted, glassTint, surfaceFrost)\n" +
-                  "                    + rainbowFringe\n" +
-                  "                    + float3(surfaceSheen + innerCushion + outerBorder);\n" +
+                  "    float3 finalRGB = glassColor - float3(innerSubtleShade) + float3(innerMeniscusGlow + whiteRim);\n" +
                   "    finalRGB = clamp(finalRGB, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0));\n" +
                   "\n" +
-                  "    return half4(finalRGB.r, finalRGB.g, finalRGB.b, alphaMask);\n" +
+                  "    // 整体保持温润通透的 92% 光学玻璃不透明度\n" +
+                  "    float finalAlpha = alphaMask * 0.92;\n" +
+                  "    return half4(finalRGB.r * finalAlpha, finalRGB.g * finalAlpha, finalRGB.b * finalAlpha, finalAlpha);\n" +
                   "}\n";
 
               @Override
               public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
                   if (!TARGET_PACKAGE.equals(lpparam.packageName)) return;
 
-                  // 1. 注入底层极光流光背景并清除容器原本的不透明底色
                   XposedHelpers.findAndHookMethod(
                       Activity.class,
                       "onPostCreate",
@@ -281,7 +286,7 @@ jobs:
                           protected void afterHookedMethod(MethodHookParam param) {
                               try {
                                   Activity activity = (Activity) param.thisObject;
-                                  injectAuroraBackdrop(activity);
+                                  injectSoftBackdrop(activity);
                               } catch (Throwable t) {
                                   XposedBridge.log(t);
                               }
@@ -289,11 +294,9 @@ jobs:
                       }
                   );
 
-                  // 2. 拦截 MaterialCardView / CardView 的动态涂色（解决「运行中」和「配置」变回纯蓝/纯灰的问题）
                   hookCardBackgroundColor(lpparam.classLoader, "androidx.cardview.widget.CardView");
                   hookCardBackgroundColor(lpparam.classLoader, "com.google.android.material.card.MaterialCardView");
 
-                  // 3. 在 ViewGroup 绘制子控件文字/图标之前，直接在画布上绘制圆角矩形液态玻璃
                   XposedHelpers.findAndHookMethod(
                       ViewGroup.class,
                       "dispatchDraw",
@@ -306,7 +309,6 @@ jobs:
                                   Object typeObj = view.getTag(TAG_GLASS_TYPE);
                                   if (!(typeObj instanceof Integer)) return;
 
-                                  // 确保自身默认背景始终透明
                                   Drawable bg = view.getBackground();
                                   if (bg != null && bg.getAlpha() != 0) {
                                       bg.setAlpha(0);
@@ -329,7 +331,6 @@ jobs:
                       }
                   );
 
-                  // 4. 精准标记 Clash Meta 所有菜单卡片与条目
                   hookTargetClass(lpparam.classLoader, "com.github.kr328.clash.design.view.LargeActionCard", 1);
                   hookTargetClass(lpparam.classLoader, "com.github.kr328.clash.design.view.LargeActionLabel", 2);
                   hookTargetClass(lpparam.classLoader, "com.github.kr328.clash.design.view.ActionLabel", 2);
@@ -379,7 +380,6 @@ jobs:
                   );
               }
 
-              // 判断卡片原本是否被赋予了高饱和度的主题蓝色（如「运行中」卡片）
               private void updateAccentTagFromColor(View v, int color) {
                   if (color == Color.TRANSPARENT) return;
                   float[] hsv = new float[3];
@@ -412,7 +412,6 @@ jobs:
                       }
 
                       if (glassType == 1) {
-                          // 针对 LargeActionCard (MaterialCardView) 移除默认实心底色与阴影边框
                           try {
                               Object cslObj = XposedHelpers.callMethod(targetView, "getCardBackgroundColor");
                               if (cslObj instanceof ColorStateList) {
@@ -436,16 +435,16 @@ jobs:
                   }
               }
 
-              private void injectAuroraBackdrop(Activity activity) {
+              private void injectSoftBackdrop(Activity activity) {
                   if (activity.getWindow() == null) return;
                   View decor = activity.getWindow().getDecorView();
                   if (!(decor instanceof ViewGroup)) return;
                   final ViewGroup decorView = (ViewGroup) decor;
 
                   if (decorView.findViewWithTag(TAG_AURORA_BG) == null) {
-                      AuroraBackdropView auroraView = new AuroraBackdropView(activity);
-                      auroraView.setTag(TAG_AURORA_BG);
-                      decorView.addView(auroraView, 0, new FrameLayout.LayoutParams(
+                      SoftBackdropView backdropView = new SoftBackdropView(activity);
+                      backdropView.setTag(TAG_AURORA_BG);
+                      decorView.addView(backdropView, 0, new FrameLayout.LayoutParams(
                           ViewGroup.LayoutParams.MATCH_PARENT,
                           ViewGroup.LayoutParams.MATCH_PARENT
                       ));
@@ -500,10 +499,11 @@ jobs:
                   );
               }
 
-              private static class AuroraBackdropView extends View {
+              // 柔和温润的浅雾环境背景，配合乳白玻璃产生参考图中的自然散射光感
+              private static class SoftBackdropView extends View {
                   private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
-                  public AuroraBackdropView(Context context) {
+                  public SoftBackdropView(Context context) {
                       super(context);
                   }
 
@@ -517,24 +517,24 @@ jobs:
                       boolean isDark = (getResources().getConfiguration().uiMode &
                           Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
 
-                      canvas.drawColor(isDark ? Color.parseColor("#0D111C") : Color.parseColor("#EAF0FB"));
+                      canvas.drawColor(isDark ? Color.parseColor("#1C212B") : Color.parseColor("#E8EEF5"));
 
-                      int c1 = isDark ? Color.parseColor("#662E7CF6") : Color.parseColor("#7760A5FA");
-                      int c2 = isDark ? Color.parseColor("#669347F5") : Color.parseColor("#77C084FC");
-                      int c3 = isDark ? Color.parseColor("#6610B981") : Color.parseColor("#7734D399");
+                      int c1 = isDark ? Color.parseColor("#554A90E2") : Color.parseColor("#6674B9FF");
+                      int c2 = isDark ? Color.parseColor("#552ECC71") : Color.parseColor("#6655EFC4");
+                      int c3 = isDark ? Color.parseColor("#449B59B6") : Color.parseColor("#55A29BFE");
 
                       paint.setShader(new RadialGradient(
-                          w * 0.20f, h * 0.22f, w * 0.68f, c1, Color.TRANSPARENT, Shader.TileMode.CLAMP
+                          w * 0.22f, h * 0.20f, w * 0.75f, c1, Color.TRANSPARENT, Shader.TileMode.CLAMP
                       ));
                       canvas.drawRect(0, 0, w, h, paint);
 
                       paint.setShader(new RadialGradient(
-                          w * 0.85f, h * 0.48f, w * 0.65f, c2, Color.TRANSPARENT, Shader.TileMode.CLAMP
+                          w * 0.78f, h * 0.46f, w * 0.72f, c2, Color.TRANSPARENT, Shader.TileMode.CLAMP
                       ));
                       canvas.drawRect(0, 0, w, h, paint);
 
                       paint.setShader(new RadialGradient(
-                          w * 0.28f, h * 0.80f, w * 0.72f, c3, Color.TRANSPARENT, Shader.TileMode.CLAMP
+                          w * 0.32f, h * 0.82f, w * 0.78f, c3, Color.TRANSPARENT, Shader.TileMode.CLAMP
                       ));
                       canvas.drawRect(0, 0, w, h, paint);
                   }
@@ -543,27 +543,34 @@ jobs:
               private static class LiquidGlassDrawer {
                   private RuntimeShader runtimeShader;
                   private final Paint shaderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
                   private final Paint fallbackFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
                   private final Paint fallbackStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
                   private final RectF rectF = new RectF();
                   private final int[] locationTemp = new int[2];
 
-                  private final float cornerRadiusPx;
-                  private final float refractionHeightPx;
+                  private final float bevelWidthPx;
                   private final float refractionAmountPx;
                   private final float labelInsetXPx;
                   private final float labelInsetYPx;
+                  private final float shadowRadiusPx;
+                  private final float shadowOffsetYPx;
                   private final float screenW;
                   private final float screenH;
 
                   public LiquidGlassDrawer(Context context) {
-                      this.cornerRadiusPx = dpToPx(context, 24f);
-                      this.refractionHeightPx = dpToPx(context, 24f);
-                      this.refractionAmountPx = dpToPx(context, 38f);
+                      this.bevelWidthPx = dpToPx(context, 18f);       // 宽幅柔滑水滴折光带
+                      this.refractionAmountPx = dpToPx(context, 26f); // 温和透镜折射偏移
                       this.labelInsetXPx = dpToPx(context, 16f);
                       this.labelInsetYPx = dpToPx(context, 5f);
+                      this.shadowRadiusPx = dpToPx(context, 10f);
+                      this.shadowOffsetYPx = dpToPx(context, 4f);
                       this.screenW = context.getResources().getDisplayMetrics().widthPixels;
                       this.screenH = context.getResources().getDisplayMetrics().heightPixels;
+
+                      shadowPaint.setStyle(Paint.Style.FILL);
+                      shadowPaint.setColor(0x00000000);
+                      shadowPaint.setShadowLayer(shadowRadiusPx, 0f, shadowOffsetYPx, 0x26000000);
 
                       try {
                           this.runtimeShader = new RuntimeShader(LIQUID_GLASS_AGSL);
@@ -578,9 +585,16 @@ jobs:
                       int h = view.getHeight();
                       if (w <= 0 || h <= 0) return;
 
-                      // LargeActionCard 已自带 16dp 外边距；LargeActionLabel 内缩 16dp 与上方卡片严丝合缝对齐
                       float insetX = (glassType == 2) ? labelInsetXPx : 0f;
                       float insetY = (glassType == 2) ? labelInsetYPx : 0f;
+
+                      // 核心几何改变：菜单项使用 100% 跑道圆胶囊半径（高度的一半），大卡片使用饱满大圆角
+                      float boxH = h - insetY * 2f;
+                      float pillRadius = (glassType == 2) ? (boxH * 0.5f) : (boxH * 0.44f);
+
+                      // 1. 先绘制胶囊底部的柔和悬浮弥散阴影（复刻参考图底栏悬浮感）
+                      rectF.set(insetX + 2f, insetY + 2f, w - insetX - 2f, h - insetY - 2f);
+                      canvas.drawRoundRect(rectF, pillRadius, pillRadius, shadowPaint);
 
                       boolean isDark = (view.getResources().getConfiguration().uiMode &
                           Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
@@ -592,30 +606,28 @@ jobs:
                           runtimeShader.setFloatUniform("uScreenPos", (float) locationTemp[0], (float) locationTemp[1]);
                           runtimeShader.setFloatUniform("uScreenSize", screenW, screenH);
                           runtimeShader.setFloatUniform("uInset", insetX, insetY);
-                          runtimeShader.setFloatUniform("uCornerRadius", cornerRadiusPx);
-                          runtimeShader.setFloatUniform("uRefractionHeight", refractionHeightPx);
+                          runtimeShader.setFloatUniform("uCornerRadius", pillRadius);
+                          runtimeShader.setFloatUniform("uBevelWidth", bevelWidthPx);
                           runtimeShader.setFloatUniform("uRefractionAmount", refractionAmountPx);
-                          runtimeShader.setFloatUniform("uAberration", 0.30f);
                           runtimeShader.setFloatUniform("uIsDark", isDark ? 1.0f : 0.0f);
                           runtimeShader.setFloatUniform("uIsAccent", isAccent ? 1.0f : 0.0f);
 
                           shaderPaint.setShader(runtimeShader);
                           canvas.drawRect(0, 0, w, h, shaderPaint);
                       } else {
-                          // 兜底绘制：即使极端情况下不支持 AGSL，也能展示高光玻璃圆角胶囊
                           rectF.set(insetX, insetY, w - insetX, h - insetY);
-                          fallbackFillPaint.setColor(isAccent ? 0x443B82F6 : (isDark ? 0x33FFFFFF : 0x66FFFFFF));
-                          canvas.drawRoundRect(rectF, cornerRadiusPx, cornerRadiusPx, fallbackFillPaint);
+                          fallbackFillPaint.setColor(isAccent ? 0x992ECC71 : 0xB8C8D0D8);
+                          canvas.drawRoundRect(rectF, pillRadius, pillRadius, fallbackFillPaint);
 
                           fallbackStrokePaint.setStyle(Paint.Style.STROKE);
-                          fallbackStrokePaint.setStrokeWidth(dpToPx(view.getContext(), 1.2f));
+                          fallbackStrokePaint.setStrokeWidth(dpToPx(view.getContext(), 1.4f));
                           fallbackStrokePaint.setShader(new LinearGradient(
                               rectF.left, rectF.top, rectF.right, rectF.bottom,
-                              new int[]{0xBBFFFFFF, 0x22FFFFFF, 0x88FFFFFF},
+                              new int[]{0xEEFFFFFF, 0x55FFFFFF, 0xCCFFFFFF},
                               new float[]{0f, 0.5f, 1f},
                               Shader.TileMode.CLAMP
                           ));
-                          canvas.drawRoundRect(rectF, cornerRadiusPx, cornerRadiusPx, fallbackStrokePaint);
+                          canvas.drawRoundRect(rectF, pillRadius, pillRadius, fallbackStrokePaint);
                       }
                   }
               }
@@ -628,5 +640,5 @@ jobs:
       - name: Upload Ready-to-Install APK
         uses: actions/upload-artifact@v4
         with:
-          name: ClashMeta-LiquidGlass-v2-APK
+          name: ClashMeta-LiquidGlass-v3-APK
           path: app/build/outputs/apk/debug/app-debug.apk
